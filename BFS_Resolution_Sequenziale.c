@@ -148,6 +148,7 @@ int main() {
         {'0','#','#','#','#','0','0'},
         {'0','0','0','0','0','0','0'}
     };
+    //test
     
     Point start, end;
     findStartEnd(maze, &start, &end);
