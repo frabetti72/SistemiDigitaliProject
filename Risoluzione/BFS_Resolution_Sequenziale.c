@@ -164,9 +164,8 @@ int main() {
             {'0','#','#','#','0','#','0'},
             {'0','0','0','0','#','3','0'},
             {'0','#','#','#','#','0','0'}
-        }//labirinto senza percorso
+        }//labirinto senza percorso        
         
-        // Aggiungi altri labirinti qui
     };
 
     int numMazes = sizeof(mazes) / sizeof(mazes[0]);
@@ -201,6 +200,5 @@ int main() {
         }
         printf("\n.\n");
     }
-
-    return 0;
+    return 0; //form develop
 }
