@@ -139,41 +139,68 @@ bool solveMaze(char maze[ROWS][COLS], int nodeMap[ROWS][COLS],
 }
 
 int main() {
-    // Inizializza il labirinto con punto di partenza (2) e arrivo (3) in posizioni diverse
-    char maze[ROWS][COLS] = {
-        {'0','0','#','0','0','0','0'},
-        {'0','2','#','0','0','0','0'},
-        {'0','0','#','0','0','0','0'},
-        {'0','0','0','#','0','3','0'},
-        {'0','#','#','#','#','0','0'},
-        {'0','0','0','0','0','0','0'}
+    // Array di labirinti
+    char mazes[][ROWS][COLS] = {
+        {
+            {'0','0','#','0','0','0','0'},
+            {'0','2','#','0','0','0','0'},
+            {'0','0','#','0','0','0','0'},
+            {'0','0','0','#','0','3','0'},
+            {'0','#','#','#','#','0','0'},
+            {'0','0','0','0','0','0','0'}
+        },//labirinto con percorso lungo
+        {
+            {'0','0','0','0','0','0','0'},
+            {'0','2','#','#','#','#','0'},
+            {'0','0','0','0','0','#','0'},
+            {'0','#','#','#','0','#','0'},
+            {'0','0','0','0','0','3','0'},
+            {'0','#','#','#','#','0','0'}
+        },//labirinto con percorso corto
+        {
+            {'0','0','0','0','0','#','0'},
+            {'0','2','#','#','#','#','0'},
+            {'0','0','0','0','0','#','0'},
+            {'0','#','#','#','0','#','0'},
+            {'0','0','0','0','#','3','0'},
+            {'0','#','#','#','#','0','0'}
+        }//labirinto senza percorso
+        
+        // Aggiungi altri labirinti qui
     };
-    //test
-    
-    Point start, end;
-    findStartEnd(maze, &start, &end);
-    
-    // Stampa il labirinto iniziale
-    printMaze(maze);
-    
-    // Crea e stampa la mappa dei nodi
-    int nodeMap[ROWS][COLS];
-    numberNodes(maze, nodeMap);
-    
-    // Trova e stampa il percorso
-    int path[MAX_NODES];
-    int pathLength;
-    
-    if (solveMaze(maze, nodeMap, start, end, path, &pathLength)) {
-        printf("\nPercorso più breve (sequenza di nodi): ");
-        for (int i = 0; i < pathLength; i++) {
-            printf("%d", path[i]);
-            if (i < pathLength - 1) printf(", ");
+
+    int numMazes = sizeof(mazes) / sizeof(mazes[0]);
+
+    for (int i = 0; i < numMazes; i++) {
+        printf("\n\nTesting maze %d:\n", i + 1);
+        char (*maze)[COLS] = mazes[i];
+
+        Point start, end;
+        findStartEnd(maze, &start, &end);
+
+        // Stampa il labirinto iniziale
+        printMaze(maze);
+
+        // Crea e stampa la mappa dei nodi
+        int nodeMap[ROWS][COLS];
+        numberNodes(maze, nodeMap);
+
+        // Trova e stampa il percorso
+        int path[MAX_NODES];
+        int pathLength;
+
+        if (solveMaze(maze, nodeMap, start, end, path, &pathLength)) {
+            printf("\nPercorso più breve (sequenza di nodi): ");
+            for (int j = 0; j < pathLength; j++) {
+                printf("%d", path[j]);
+                if (j < pathLength - 1) printf(", ");
+            }
+            printf("\n");
+        } else {
+            printf("\nNessun percorso trovato!\n");
         }
-        printf("\n");
-    } else {
-        printf("\nNessun percorso trovato!\n");
+        printf("\n.\n");
     }
-    
+
     return 0;
 }
