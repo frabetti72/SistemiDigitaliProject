@@ -5,4 +5,8 @@ Il progetto sarà così strutturato:
   - BFS_Resolution_CUDA_optimized: per la risoluzione ottimizzata
 - Cartella di Generazione: per algoritmi di generazione
 
+Inoltre sono presenti branch:
+- main: branch principale dove vengono pushate solo le modifiche funzionanti
+- develop: branch per la sperimentazione
+
 
