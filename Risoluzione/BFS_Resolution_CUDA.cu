@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <stdio.h> 
 
 __global__ void kernel(void) {
    printf("Hello, world! from GPU thread %d\n", threadIdx.x);
