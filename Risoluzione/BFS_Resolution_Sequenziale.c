@@ -14,6 +14,7 @@ typedef struct {
 typedef struct {
     Point pos;
     int nodeNum;
+    int nodeVisited;
 } Node;
 
 // Direzioni possibili: su, giù, sinistra, destra
@@ -84,8 +85,14 @@ int numberNodes(char maze[ROWS][COLS], int nodeMap[ROWS][COLS]) {
     return nodeCount;
 }
 
-bool solveMaze(char maze[ROWS][COLS], int nodeMap[ROWS][COLS], 
-               Point start, Point end, int path[], int* pathLength) {
+bool solveMaze(
+    char maze[ROWS][COLS],
+    int nodeMap[ROWS][COLS],
+    Point start,
+    Point end,
+    int path[],
+    int* pathLength
+    ) {
     bool visited[ROWS][COLS] = {false};
     Point parent[ROWS][COLS];
     Node queue[MAX_NODES];
