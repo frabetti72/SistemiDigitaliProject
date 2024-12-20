@@ -14,7 +14,6 @@ typedef struct {
 typedef struct {
     Point pos;
     int nodeNum;
-    int nodeVisited;
 } Node;
 
 // Direzioni possibili: su, giù, sinistra, destra
