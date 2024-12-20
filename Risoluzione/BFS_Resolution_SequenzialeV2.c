@@ -5,6 +5,7 @@
 #define ROWS 6
 #define COLS 7
 #define MAX_NODES (ROWS * COLS)
+#define NUM_DIRECTIONS 4
 
 typedef struct {
     int row;
@@ -19,9 +20,13 @@ typedef struct {
     bool wall;         // indica se è un muro
 } Node;
 
-// Direzioni possibili: su, giù, sinistra, destra
-int dr[] = {-1, 1, 0, 0};
-int dc[] = {0, 0, -1, 1};
+// Definiamo le direzioni come array di Point
+const Point directions[NUM_DIRECTIONS] = {
+    {-1, 0},  // SU
+    {1, 0},   // GIÙ
+    {0, -1},  // SINISTRA
+    {0, 1}    // DESTRA
+};
 
 bool isValid(int r, int c) {
     return r >= 0 && r < ROWS && c >= 0 && c < COLS;
@@ -30,6 +35,15 @@ bool isValid(int r, int c) {
 // Converte coordinate matrice in indice array
 int coordToIndex(int row, int col) {
     return row * COLS + col;
+}
+
+// Calcola la nuova posizione dato un punto e una direzione
+Point getNewPosition(Point current, Point direction) {
+    Point newPos = {
+        current.row + direction.row,
+        current.col + direction.col
+    };
+    return newPos;
 }
 
 // Inizializza l'array dei nodi dal labirinto originale
@@ -112,13 +126,12 @@ bool solveMaze(Node nodes[], Point start, Point end, int path[], int* pathLength
             return true;
         }
         
-        // Esplora le direzioni possibili
-        for (int i = 0; i < 4; i++) {
-            int newRow = current->pos.row + dr[i];
-            int newCol = current->pos.col + dc[i];
+        // Esplora le direzioni possibili usando l'array di Point
+        for (int i = 0; i < NUM_DIRECTIONS; i++) {
+            Point newPos = getNewPosition(current->pos, directions[i]);
             
-            if (isValid(newRow, newCol)) {
-                int newIdx = coordToIndex(newRow, newCol);
+            if (isValid(newPos.row, newPos.col)) {
+                int newIdx = coordToIndex(newPos.row, newPos.col);
                 if (!nodes[newIdx].visited && !nodes[newIdx].wall) {
                     nodes[newIdx].visited = true;
                     nodes[newIdx].parentIndex = coordToIndex(current->pos.row, current->pos.col);
