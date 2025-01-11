@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "c:/Users/frabe/source/repos/SistemiDigitaliProject/Risoluzione",
-      "program": "c:/Users/frabe/source/repos/SistemiDigitaliProject/Risoluzione/build/Debug/outDebug",
+      "cwd": "c:/Users/frabe/source/repos/SistemiDigitaliProject/Risoluzione/stepsV2",
+      "program": "c:/Users/frabe/source/repos/SistemiDigitaliProject/Risoluzione/stepsV2/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [
