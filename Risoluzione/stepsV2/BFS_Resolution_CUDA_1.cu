@@ -281,6 +281,7 @@ int main() {
     };
 
     int numMazes = sizeof(mazes) / sizeof(mazes[0]);
+    printf("\n\nVersione CUDA_1 (parallelizzazione esplorazione nodi): \n");
 
     for (int i = 0; i < numMazes; i++) {
         printf("\n\nTesting maze %d:\n", i + 1);
