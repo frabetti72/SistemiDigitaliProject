@@ -183,7 +183,8 @@ int main() {
     };
 
     int numMazes = sizeof(mazes) / sizeof(mazes[0]);
-
+    printf("\n\nVersione sequenziale standard:\n");
+    
     for (int i = 0; i < numMazes; i++) {
         printf("\n\nTesting maze %d:\n", i + 1);
         char (*maze)[COLS] = mazes[i];
