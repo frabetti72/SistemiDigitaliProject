@@ -50,50 +50,87 @@ __host__ __device__ Point makePoint(int row, int col) {
     return p;
 }
 
-// Kernel principale per l'esplorazione BFS
+//nuovo kernel (much wow)
 __global__ void exploreLevel(
     Node* nodes,
     int* frontier,
     int* nextFrontier,
     int* frontierSize,
-    int* nextFrontierSize,
+    int* nextFrontierSize,  // Rimosso volatile
     bool* levelCompleted,
     int endIdx
 ) {
+    __shared__ int sharedFrontier[BLOCK_SIZE];
+    __shared__ int sharedNextSize;
+    
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int lid = threadIdx.x;
     
-    if (tid >= *frontierSize) return;
+    // Inizializza la shared memory
+    if (lid == 0) {
+        sharedNextSize = 0;
+    }
+    __syncthreads();
     
-    int nodeIdx = frontier[tid];
-    Node* currentNode = &nodes[nodeIdx];
+    // Carica il nodo della frontiera in shared memory
+    int nodeIdx = -1;
+    if (tid < *frontierSize) {
+        nodeIdx = frontier[tid];
+        sharedFrontier[lid] = nodeIdx;
+    }
+    __syncthreads();
     
-    // Esplora tutte le direzioni
-    for (int dir = 0; dir < NUM_DIRECTIONS; dir++) {
-        Point newPos = {
-            currentNode->pos.row + directions[dir].row,
-            currentNode->pos.col + directions[dir].col
-        };
+    if (nodeIdx != -1) {
+        Node* currentNode = &nodes[nodeIdx];
+        int localNextNodes[NUM_DIRECTIONS];
+        int localNextCount = 0;
         
-        if (isValid(newPos.row, newPos.col)) {
-            int newIdx = coordToIndex(newPos.row, newPos.col);
+        // Esplora tutte le direzioni
+        for (int dir = 0; dir < NUM_DIRECTIONS; dir++) {
+            Point newPos = {
+                currentNode->pos.row + directions[dir].row,
+                currentNode->pos.col + directions[dir].col
+            };
             
-            // Se troviamo un nodo non visitato e non muro
-            if (!nodes[newIdx].visited && !nodes[newIdx].wall) {
-                nodes[newIdx].visited = true;
-                nodes[newIdx].parentIndex = nodeIdx;
+            if (isValid(newPos.row, newPos.col)) {
+                int newIdx = coordToIndex(newPos.row, newPos.col);
                 
-                // Aggiungi alla nuova frontiera atomicamente
-                int position = atomicAdd(nextFrontierSize, 1);
-                nextFrontier[position] = newIdx;
-                
-                // Se abbiamo trovato l'uscita
-                if (newIdx == endIdx) {
-                    *levelCompleted = true;
+                if (!nodes[newIdx].visited && !nodes[newIdx].wall) {
+                    // Usa atomicCAS invece di atomicExch per il flag visited
+                    if (atomicCAS((unsigned int*)&nodes[newIdx].visited, false, true) == false) {
+                        nodes[newIdx].parentIndex = nodeIdx;
+                        localNextNodes[localNextCount++] = newIdx;
+                        
+                        if (newIdx == endIdx) {
+                            *levelCompleted = true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Aggiungi i nodi locali alla shared memory
+        if (localNextCount > 0) {
+            int localBase = atomicAdd((int*)&sharedNextSize, localNextCount);
+            
+            if (localBase + localNextCount < BLOCK_SIZE) {
+                for (int i = 0; i < localNextCount; i++) {
+                    sharedFrontier[localBase + i] = localNextNodes[i];
                 }
             }
         }
     }
+    __syncthreads();
+    
+    // Copia i risultati in memoria globale
+    if (lid == 0 && sharedNextSize > 0) {
+        int globalBase = atomicAdd(nextFrontierSize, sharedNextSize);
+        for (int i = 0; i < sharedNextSize; i++) {
+            nextFrontier[globalBase + i] = sharedFrontier[i];
+        }
+    }
 }
+
 
 // Funzione di inizializzazione dei nodi
 void initializeNodes(char maze[ROWS][COLS], Node* nodes, Point* start, Point* end) {
@@ -131,7 +168,8 @@ void initializeNodes(char maze[ROWS][COLS], Node* nodes, Point* start, Point* en
     } \
 }
 
-// Funzione host per inizializzare e gestire la risoluzione
+
+// Modifica la funzione solveMazeCuda per gestire la nuova frontiera
 bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* pathLength) {
     Node* deviceNodes;
     int *deviceFrontier, *deviceNextFrontier;
@@ -161,7 +199,10 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     int endIdx = coordToIndex(end.row, end.col);
     bool pathFound = false;
     
-    // Loop principale BFS
+    int* compactFrontier;
+    cudaMalloc(&compactFrontier, MAX_NODES * sizeof(int));
+    cudaCheckError();
+    
     while (true) {
         int hostFrontierSize;
         cudaMemcpy(&hostFrontierSize, deviceFrontierSize, sizeof(int), cudaMemcpyDeviceToHost);
@@ -176,8 +217,10 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
         cudaMemcpy(deviceLevelCompleted, &false_val, sizeof(bool), cudaMemcpyHostToDevice);
         cudaCheckError();
         
-        // Lancia il kernel
+        // Calcola la griglia ottimale
         int numBlocks = (hostFrontierSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        
+        // Lancia il kernel ottimizzato
         exploreLevel<<<numBlocks, BLOCK_SIZE>>>(
             deviceNodes,
             deviceFrontier,
@@ -237,7 +280,8 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     cudaFree(deviceFrontierSize);
     cudaFree(deviceNextFrontierSize);
     cudaFree(deviceLevelCompleted);
-    
+    cudaFree(compactFrontier); //aggiunto
+
     return pathFound;
 }
 
@@ -281,7 +325,6 @@ int main() {
     };
 
     int numMazes = sizeof(mazes) / sizeof(mazes[0]);
-    printf("\n\nVersione CUDA_1 (parallelizzazione esplorazione nodi): \n");
 
     for (int i = 0; i < numMazes; i++) {
         printf("\n\nTesting maze %d:\n", i + 1);
