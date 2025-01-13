@@ -120,6 +120,19 @@ void initializeNodes(char maze[ROWS][COLS], Node* nodes, Point* start, Point* en
             }
         }
     }
+
+    // Stampa il labirinto con i numeri dei nodi
+    printf("\nLabirinto con nodi numerati:\n");
+    for (int i = 0; i < ROWS; i++) {
+        for (int j = 0; j < COLS; j++) {
+            if (nodes[coordToIndex(i, j)].wall) {
+                printf("## ");
+            } else {
+                printf("%2d ", nodes[coordToIndex(i, j)].nodeNum);
+            }
+        }
+        printf("\n");
+    }
 }
 
 // Funzione per la gestione degli errori CUDA
