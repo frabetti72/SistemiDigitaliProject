@@ -9,6 +9,7 @@
 #define COLS 20
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
+#define MAX_MAZES 100 
 
 typedef struct {
     int row;
@@ -205,34 +206,82 @@ int initializeNodes(char maze[ROWS][COLS], Node nodes[], Point* start, Point* en
     return nodeCount;
 }
 
-int main() {
-    char mazes[][ROWS][COLS] = {
-        {
-            {'2','#','0','#','0','0','0','0','0','0','0','#','0','0','0','0','0','#','0','0'},
-            {'0','#','0','#','0','#','#','0','#','#','0','#','0','#','0','#','0','0','#','0'},
-            {'0','#','0','0','0','#','0','0','0','#','0','0','#','0','0','0','#','0','#','0'},
-            {'0','#','0','#','#','0','0','#','#','0','0','#','0','0','#','0','#','0','0','0'},
-            {'0','0','#','0','#','0','#','#','0','0','#','0','0','#','#','#','0','#','#','0'},
-            {'#','0','0','0','0','0','#','0','0','#','#','#','0','0','#','0','0','#','0','0'},
-            {'0','#','#','#','0','#','#','0','#','0','#','0','#','0','#','0','#','0','0','#'},
-            {'0','0','0','0','#','0','0','0','#','0','0','0','#','0','#','0','#','#','0','#'},
-            {'0','#','#','0','0','#','0','#','0','#','#','0','0','0','#','0','0','0','0','0'},
-            {'0','#','#','#','#','#','0','0','0','0','0','0','#','#','0','0','#','#','#','0'},
-            {'0','0','#','0','0','0','#','#','#','#','#','#','0','#','0','#','0','0','0','#'},
-            {'#','0','#','0','#','0','0','0','0','0','0','#','0','0','0','#','0','#','0','0'},
-            {'#','0','0','0','0','#','#','0','#','#','0','#','0','#','#','0','0','#','#','#'},
-            {'0','0','#','#','#','#','0','0','#','0','0','#','0','0','0','#','0','0','0','0'},
-            {'0','#','0','0','0','0','0','#','0','#','0','0','#','#','0','#','0','#','#','0'},
-            {'0','#','#','0','#','#','#','0','0','0','#','#','0','0','0','#','0','0','#','0'},
-            {'0','0','#','0','0','0','0','0','#','0','0','0','0','#','#','0','#','#','#','0'},
-            {'#','0','0','#','0','#','#','#','0','#','#','#','#','0','0','0','0','0','0','0'},
-            {'#','#','0','0','#','0','0','0','0','0','0','0','#','#','#','#','0','#','#','0'},
-            {'#','#','#','0','0','0','#','0','#','0','#','0','0','0','0','0','0','#','0','3'}
-        }
-    };
+int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Error opening file: %s\n", filename);
+        return 0;
+    }
 
-    int numMazes = sizeof(mazes) / sizeof(mazes[0]);
-    printf("\n\nVersione sequenziale riprogettata:\n");
+    int mazeCount = 0;
+    char line[COLS + 2];  // Space for COLS characters + newline + null terminator
+    int currentRow = 0;
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        // Remove newline if present
+        line[strcspn(line, "\n")] = 0;
+        
+        // Skip empty lines between mazes
+        if (strlen(line) == 0) {
+            if (currentRow == ROWS) {
+                mazeCount++;
+                currentRow = 0;
+            }
+            continue;
+        }
+
+        // Verify line length
+        if (strlen(line) != COLS) {
+            printf("Error: Invalid line length in maze %d, row %d\n", mazeCount + 1, currentRow + 1);
+            fclose(file);
+            return 0;
+        }
+
+        // Check if we've reached the maximum number of mazes
+        if (mazeCount >= MAX_MAZES) {
+            printf("Warning: Maximum number of mazes reached (%d)\n", MAX_MAZES);
+            break;
+        }
+
+        // Copy the line directly into the maze array
+        for (int col = 0; col < COLS; col++) {
+            mazes[mazeCount][currentRow][col] = line[col];
+        }
+
+        currentRow++;
+
+        // If we've read all rows for current maze
+        if (currentRow == ROWS) {
+            mazeCount++;
+            currentRow = 0;
+        }
+    }
+
+    // Handle the last maze if it's complete
+    if (currentRow == ROWS) {
+        mazeCount++;
+    } else if (currentRow != 0) {
+        // If the last maze is incomplete
+        printf("Error: Incomplete maze at end of file\n");
+        fclose(file);
+        return mazeCount;
+    }
+
+    fclose(file);
+    return mazeCount;
+}
+
+int main() {
+    char mazes[MAX_MAZES][ROWS][COLS];
+    const char* filename = "mazes.txt";  // Your input file name
+    
+    int numMazes = loadMazesFromFile(filename, mazes);
+    if (numMazes == 0) {
+        printf("No mazes loaded from file. Exiting...\n");
+        return 1;
+    }
+
+    printf("\n\nVersione sequenziale: \n");
 
     for (int i = 0; i < numMazes; i++) {
         printf("\n\nTesting maze %d:\n", i + 1);
