@@ -1,7 +1,7 @@
-/// Prima implementazione di CUDA
-/// ogni thread si occupa di un nodo della frontiera (analizza i vicini e costruisce nuova frontiera)
-/// exploreLevel è il kernel principale (analizza un livello alla volta => una chiamata per iterazione del livello)
+/// SECONDA implementazione di CUDA
+/// Implementata la ricostruzione del percorso con CUDA
 /// 
+
 
 #include <stdio.h>
 #include <cuda_runtime.h>
