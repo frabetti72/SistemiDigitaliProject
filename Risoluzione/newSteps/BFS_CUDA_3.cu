@@ -6,12 +6,18 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 
-#define ROWS 20
-#define COLS 20
+#define ROWS 50
+#define COLS 50
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
 #define MAX_MAZES 100 
+
+struct MazeConfig {
+    int rows;
+    int cols;
+    int maxNodes;
+};
 
 // Strutture dati per GPU
 typedef struct {
@@ -36,12 +42,12 @@ __constant__ Point directions[NUM_DIRECTIONS] = {
 };
 
 // Funzioni helper utilizzabili sia su host che device
-__host__ __device__ bool isValid(int r, int c) {
-    return r >= 0 && r < ROWS && c >= 0 && c < COLS;
+__host__ __device__ bool isValid(int r, int c, const MazeConfig* config) {
+    return r >= 0 && r < config->rows && c >= 0 && c < config->cols;
 }
 
-__host__ __device__ int coordToIndex(int row, int col) {
-    return row * COLS + col;
+__host__ __device__ int coordToIndex(int row, int col, const MazeConfig* config) {
+    return row * config->cols + col;
 }
 
 __host__ __device__ Point makePoint(int row, int col) {
@@ -49,6 +55,50 @@ __host__ __device__ Point makePoint(int row, int col) {
     p.row = row;
     p.col = col;
     return p;
+}
+// Kernel per la ricostruzione parallela del percorso
+__global__ void reconstructPathKernel(
+    Node* nodes,
+    int* path,
+    int* pathLength,
+    int startIdx,
+    int endIdx,
+    int maxLength
+) {
+    __shared__ int sharedPath[BLOCK_SIZE];
+    int currentLength = 0;
+    
+    // Il thread 0 si occupa della ricostruzione iniziale
+    if (threadIdx.x == 0) {
+        int currentIdx = endIdx;
+        while (currentIdx != startIdx && currentLength < maxLength) {
+            sharedPath[currentLength++] = nodes[currentIdx].nodeNum;
+            currentIdx = nodes[currentIdx].parentIndex;
+        }
+        if (currentLength < maxLength) {
+            sharedPath[currentLength++] = nodes[startIdx].nodeNum;
+        }
+        *pathLength = currentLength;
+    }
+    
+    // Sincronizza tutti i thread del blocco
+    __syncthreads();
+    
+    // Parallelizza l'inversione del percorso
+    int halfLength = *pathLength / 2;
+    for (int i = threadIdx.x; i < halfLength; i += blockDim.x) {
+        int temp = sharedPath[i];
+        sharedPath[i] = sharedPath[*pathLength - 1 - i];
+        sharedPath[*pathLength - 1 - i] = temp;
+    }
+    
+    // Sincronizza prima della copia finale
+    __syncthreads();
+    
+    // Copia il risultato in memoria globale
+    for (int i = threadIdx.x; i < *pathLength; i += blockDim.x) {
+        path[i] = sharedPath[i];
+    }
 }
 
 // Kernel principale per l'esplorazione BFS
@@ -59,37 +109,46 @@ __global__ void exploreLevel(
     int* frontierSize,
     int* nextFrontierSize,
     bool* levelCompleted,
-    int endIdx
+    int endIdx,
+    const MazeConfig config
 ) {
+    extern __shared__ int sharedMem[];
+    int* sharedFrontier = sharedMem;
+    
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int localId = threadIdx.x;
+    
+    // Carica la frontiera in memoria condivisa
+    if (tid < *frontierSize) {
+        sharedFrontier[localId] = frontier[tid];
+    }
+    __syncthreads();
     
     if (tid >= *frontierSize) return;
     
-    int nodeIdx = frontier[tid];
+    int nodeIdx = sharedFrontier[localId];
     Node* currentNode = &nodes[nodeIdx];
     
-    // Esplora tutte le direzioni
+    #pragma unroll
     for (int dir = 0; dir < NUM_DIRECTIONS; dir++) {
         Point newPos = {
             currentNode->pos.row + directions[dir].row,
             currentNode->pos.col + directions[dir].col
         };
         
-        if (isValid(newPos.row, newPos.col)) {
-            int newIdx = coordToIndex(newPos.row, newPos.col);
+        if (isValid(newPos.row, newPos.col, &config)) {
+            int newIdx = coordToIndex(newPos.row, newPos.col, &config);
             
-            // Se troviamo un nodo non visitato e non muro
             if (!nodes[newIdx].visited && !nodes[newIdx].wall) {
-                nodes[newIdx].visited = true;
-                nodes[newIdx].parentIndex = nodeIdx;
-                
-                // Aggiungi alla nuova frontiera atomicamente
-                int position = atomicAdd(nextFrontierSize, 1);
-                nextFrontier[position] = newIdx;
-                
-                // Se abbiamo trovato l'uscita
-                if (newIdx == endIdx) {
-                    *levelCompleted = true;
+                if (atomicCAS((int*)&nodes[newIdx].visited, 0, 1) == 0) {
+                    nodes[newIdx].parentIndex = nodeIdx;
+                    
+                    int position = atomicAdd(nextFrontierSize, 1);
+                    nextFrontier[position] = newIdx;
+                    
+                    if (newIdx == endIdx) {
+                        *levelCompleted = true;
+                    }
                 }
             }
         }
@@ -97,12 +156,12 @@ __global__ void exploreLevel(
 }
 
 // Funzione di inizializzazione dei nodi
-void initializeNodes(char maze[ROWS][COLS], Node* nodes, Point* start, Point* end) {
+void initializeNodes(char maze[][COLS], Node* nodes, Point* start, Point* end, MazeConfig config) {
     int nodeCount = 0;
     
-    for (int i = 0; i < ROWS; i++) {
-        for (int j = 0; j < COLS; j++) {
-            int idx = coordToIndex(i, j);
+    for (int i = 0; i < config.rows; i++) {
+        for (int j = 0; j < config.cols; j++) {
+            int idx = coordToIndex(i, j, &config);
             nodes[idx].pos = makePoint(i, j);
             nodes[idx].visited = false;
             nodes[idx].wall = (maze[i][j] == '#');
@@ -124,12 +183,12 @@ void initializeNodes(char maze[ROWS][COLS], Node* nodes, Point* start, Point* en
 
     // Stampa il labirinto con i numeri dei nodi
     printf("\nLabirinto con nodi numerati:\n");
-    for (int i = 0; i < ROWS; i++) {
-        for (int j = 0; j < COLS; j++) {
-            if (nodes[coordToIndex(i, j)].wall) {
+    for (int i = 0; i < config.rows; i++) {
+        for (int j = 0; j < config.cols; j++) {
+            if (nodes[coordToIndex(i, j, &config)].wall) {
                 printf("## ");
             } else {
-                printf("%2d ", nodes[coordToIndex(i, j)].nodeNum);
+                printf("%2d ", nodes[coordToIndex(i, j, &config)].nodeNum);
             }
         }
         printf("\n");
@@ -145,41 +204,40 @@ void initializeNodes(char maze[ROWS][COLS], Node* nodes, Point* start, Point* en
     } \
 }
 
-// Funzione host per inizializzare e gestire la risoluzione
-bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* pathLength) {
+bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* pathLength, MazeConfig config) {
     Node* deviceNodes;
     int *deviceFrontier, *deviceNextFrontier;
     int *deviceFrontierSize, *deviceNextFrontierSize;
     bool *deviceLevelCompleted;
     
-    // Alloca memoria sulla GPU
-    cudaMalloc(&deviceNodes, MAX_NODES * sizeof(Node));
-    cudaMalloc(&deviceFrontier, MAX_NODES * sizeof(int));
-    cudaMalloc(&deviceNextFrontier, MAX_NODES * sizeof(int));
+    // Allocazione memoria basata sulla configurazione
+    cudaMalloc(&deviceNodes, config.maxNodes * sizeof(Node));
+    cudaMalloc(&deviceFrontier, config.maxNodes * sizeof(int));
+    cudaMalloc(&deviceNextFrontier, config.maxNodes * sizeof(int));
     cudaMalloc(&deviceFrontierSize, sizeof(int));
     cudaMalloc(&deviceNextFrontierSize, sizeof(int));
     cudaMalloc(&deviceLevelCompleted, sizeof(bool));
-    cudaCheckError();
     
     // Copia i nodi sulla GPU
-    cudaMemcpy(deviceNodes, hostNodes, MAX_NODES * sizeof(Node), cudaMemcpyHostToDevice);
-    cudaCheckError();
+    cudaMemcpy(deviceNodes, hostNodes, config.maxNodes * sizeof(Node), cudaMemcpyHostToDevice);
     
-    // Inizializza la frontiera con il nodo di partenza
-    int startIdx = coordToIndex(start.row, start.col);
+    // Inizializzazione frontiera
+    int startIdx = coordToIndex(start.row, start.col, &config);
     int initialFrontierSize = 1;
     cudaMemcpy(deviceFrontier, &startIdx, sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(deviceFrontierSize, &initialFrontierSize, sizeof(int), cudaMemcpyHostToDevice);
-    cudaCheckError();
     
-    int endIdx = coordToIndex(end.row, end.col);
+    int endIdx = coordToIndex(end.row, end.col, &config);
     bool pathFound = false;
     
-    // Loop principale BFS
+    // Ottieni informazioni sulla GPU
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, 0);
+    
+    // Loop principale BFS con dimensionamento ottimizzato della griglia
     while (true) {
         int hostFrontierSize;
         cudaMemcpy(&hostFrontierSize, deviceFrontierSize, sizeof(int), cudaMemcpyDeviceToHost);
-        cudaCheckError();
         
         if (hostFrontierSize == 0) break;
         
@@ -188,25 +246,34 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
         bool false_val = false;
         cudaMemcpy(deviceNextFrontierSize, &zero, sizeof(int), cudaMemcpyHostToDevice);
         cudaMemcpy(deviceLevelCompleted, &false_val, sizeof(bool), cudaMemcpyHostToDevice);
-        cudaCheckError();
         
-        // Lancia il kernel
-        int numBlocks = (hostFrontierSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        exploreLevel<<<numBlocks, BLOCK_SIZE>>>(
+        // Calcolo ottimizzato della griglia
+        int numThreadsNeeded = hostFrontierSize;
+        int numBlocks = (numThreadsNeeded + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        
+        // Assicura un minimo di blocchi per SM per massimizzare l'occupancy
+        int minBlocksPerSM = deviceProp.maxThreadsPerMultiProcessor / BLOCK_SIZE;
+        int optimalMinBlocks = deviceProp.multiProcessorCount * minBlocksPerSM;
+        numBlocks = max(numBlocks, optimalMinBlocks);
+        
+        // Limita il numero di blocchi se necessario
+        int maxBlocks = deviceProp.maxGridSize[0];
+        numBlocks = min(numBlocks, maxBlocks);
+        
+        exploreLevel<<<numBlocks, BLOCK_SIZE, BLOCK_SIZE * sizeof(int)>>>(
             deviceNodes,
             deviceFrontier,
             deviceNextFrontier,
             deviceFrontierSize,
             deviceNextFrontierSize,
             deviceLevelCompleted,
-            endIdx
+            endIdx,
+            config
         );
-        cudaCheckError();
         
-        // Controlla se abbiamo trovato il percorso
+        // Verifica completamento
         bool levelCompleted;
         cudaMemcpy(&levelCompleted, deviceLevelCompleted, sizeof(bool), cudaMemcpyDeviceToHost);
-        cudaCheckError();
         
         if (levelCompleted) {
             pathFound = true;
@@ -218,7 +285,6 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
         deviceFrontier = deviceNextFrontier;
         deviceNextFrontier = temp;
         cudaMemcpy(deviceFrontierSize, deviceNextFrontierSize, sizeof(int), cudaMemcpyDeviceToHost);
-        cudaCheckError();
     }
     
     // Se abbiamo trovato un percorso, ricostruiscilo
@@ -244,7 +310,7 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
         }
     }
     
-    // Libera la memoria
+    // Cleanup
     cudaFree(deviceNodes);
     cudaFree(deviceFrontier);
     cudaFree(deviceNextFrontier);
@@ -254,6 +320,7 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     
     return pathFound;
 }
+
 
 // Utility per stampare il labirinto
 void printMaze(char maze[ROWS][COLS]) {
@@ -337,7 +404,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
-    const char* filename = "mazes.txt";  // Your input file name
+    const char* filename = "mazes.txt";
     
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
@@ -345,7 +412,13 @@ int main() {
         return 1;
     }
 
-    printf("\n\nVersione CUDA_1 (parallelizzazione esplorazione nodi): \n");
+    printf("\n\nVersione CUDA_3 (parallelizzazione ottimizzata per grandi labirinti): \n");
+
+    // Configura le dimensioni del labirinto
+    MazeConfig config;
+    config.rows = ROWS;  // Usa le dimensioni definite
+    config.cols = COLS;
+    config.maxNodes = config.rows * config.cols;
 
     for (int i = 0; i < numMazes; i++) {
         printf("\n\nTesting maze %d:\n", i + 1);
@@ -355,12 +428,12 @@ int main() {
         Node nodes[MAX_NODES];
         
         printMaze(maze);
-        initializeNodes(maze, nodes, &start, &end);
+        initializeNodes(maze, nodes, &start, &end, config);
 
         int path[MAX_NODES];
         int pathLength;
 
-        if (solveMazeCuda(nodes, start, end, path, &pathLength)) {
+        if (solveMazeCuda(nodes, start, end, path, &pathLength, config)) {
             printf("\nPercorso più breve (sequenza di nodi): ");
             for (int j = 0; j < pathLength; j++) {
                 printf("%d", path[j]);

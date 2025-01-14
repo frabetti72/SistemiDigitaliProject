@@ -319,20 +319,24 @@ void printMaze(char maze[ROWS][COLS]) {
 int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
     FILE* file = fopen(filename, "r");
     if (file == NULL) {
-        printf("Error opening file: %s\n", filename);
+        printf("Error opening file: %s (errno: %d)\n", filename, errno);
+        perror("Error details");
         return 0;
     }
 
     int mazeCount = 0;
-    char line[COLS + 2];  // Space for COLS characters + newline + null terminator
+    char line[256];  // Make buffer larger to safely read longer lines
     int currentRow = 0;
 
     while (fgets(line, sizeof(line), file) != NULL) {
-        // Remove newline if present
-        line[strcspn(line, "\n")] = 0;
+        // Remove newline characters (both \r and \n)
+        line[strcspn(line, "\r\n")] = 0;
+        
+        size_t lineLen = strlen(line);
+        printf("After removing newline - length: %zu, content: %s\n", lineLen, line);
         
         // Skip empty lines between mazes
-        if (strlen(line) == 0) {
+        if (lineLen == 0) {
             if (currentRow == ROWS) {
                 mazeCount++;
                 currentRow = 0;
@@ -341,8 +345,9 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
         }
 
         // Verify line length
-        if (strlen(line) != COLS) {
-            printf("Error: Invalid line length in maze %d, row %d\n", mazeCount + 1, currentRow + 1);
+        if (lineLen != COLS) {
+            printf("Error: Invalid line length in maze %d, row %d (expected %d, got %zu)\n", 
+                   mazeCount + 1, currentRow + 1, COLS, lineLen);
             fclose(file);
             return 0;
         }
@@ -353,7 +358,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
             break;
         }
 
-        // Copy the line directly into the maze array
+        // Copy the line into the maze array
         for (int col = 0; col < COLS; col++) {
             mazes[mazeCount][currentRow][col] = line[col];
         }
@@ -371,8 +376,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
     if (currentRow == ROWS) {
         mazeCount++;
     } else if (currentRow != 0) {
-        // If the last maze is incomplete
-        printf("Error: Incomplete maze at end of file\n");
+        printf("Error: Incomplete maze at end of file (only %d rows read)\n", currentRow);
         fclose(file);
         return mazeCount;
     }
@@ -380,7 +384,6 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
     fclose(file);
     return mazeCount;
 }
-
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
     const char* filename = "mazes.txt";  // Your input file name
