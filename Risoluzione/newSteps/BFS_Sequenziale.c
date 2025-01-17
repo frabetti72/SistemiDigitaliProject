@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h> 
+#include <errno.h>
 
 #define ROWS 20
 #define COLS 20

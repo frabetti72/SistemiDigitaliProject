@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <cuda_runtime.h>
+#include <errno.h>
 
 #define ROWS 20
 #define COLS 20
