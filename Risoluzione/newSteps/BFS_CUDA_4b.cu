@@ -2,9 +2,12 @@
 /// riduzione della struttura node da 24 bytes a 8 bytes : 
 /// Utilizzo di mask, e compressione del dato dentro un intero
 /// visited e wall occupano 1 bit!!!!
+/// 
+/// versione con struttura modificata per rendere wall e visited facilmente accessibili
+///
 /// Ricostruzione del percorso introdotta in CUDA_2 momentaneamente rimossa in favore di quella sequenziale: potenziali errori con grandi dimensioni
 
-#include <stdint.h>  //aggiunta per configurazione colab (senza il compiler di colab non riconosce)
+#include <stdint.h>  //aggiunta per configurazione colab (senza il compiler di colab non riconosce uint64_t)
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <errno.h>
@@ -17,23 +20,21 @@
 #define MAX_MAZES 100 
 
 
-// Costanti per i bit positions
-const uint64_t ROW_MASK = 0x3F;           // 6 bits
-const uint64_t COL_MASK = 0x3F;           // 6 bits
-const uint64_t VISITED_MASK = 0x1;        // 1 bit
-const uint64_t WALL_MASK = 0x1;           // 1 bit
-const uint64_t NODE_NUM_MASK = 0xFFF;     // 12 bits
-const uint64_t PARENT_MASK = 0xFFF;       // 12 bits
+// Costanti per i bit positions (ridotte per riflettere i campi rimossi)
+const uint32_t ROW_MASK = 0x3F;           // 6 bits
+const uint32_t COL_MASK = 0x3F;           // 6 bits
+const uint32_t NODE_NUM_MASK = 0xFFF;     // 12 bits
+const uint32_t PARENT_MASK = 0xFFF;       // 12 bits
 
-// Bit shifts
+// Bit shifts (aggiornati per la nuova struttura)
 const int COL_SHIFT = 6;                  // After row
-const int VISITED_SHIFT = 12;             // After col
-const int WALL_SHIFT = 13;                // After visited
-const int NODE_NUM_SHIFT = 14;            // After wall
-const int PARENT_SHIFT = 26;              // After nodeNum
+const int NODE_NUM_SHIFT = 12;            // After col
+const int PARENT_SHIFT = 24;              // After nodeNum
 
 typedef struct {
-    uint64_t data;  // Packed data
+    uint32_t data;     // Packed data (reduced from 64 to 32 bits)
+    bool visited;      // Separated flag
+    bool wall;         // Separated flag
 } CompactNode;
 
 struct MazeConfig {
@@ -66,51 +67,33 @@ typedef struct {
 } Node;
 */
 
-// Helper functions per manipolare i bit
+// Helper functions aggiornate per la nuova struttura
 __host__ __device__ inline void setRow(CompactNode* node, int row) {
-    node->data = (node->data & ~ROW_MASK) | (static_cast<uint64_t>(row) & ROW_MASK);
+    node->data = (node->data & ~ROW_MASK) | (static_cast<uint32_t>(row) & ROW_MASK);
 }
 
 __host__ __device__ inline void setCol(CompactNode* node, int col) {
-    node->data = (node->data & ~(ROW_MASK << COL_SHIFT)) | 
-                 ((static_cast<uint64_t>(col) & ROW_MASK) << COL_SHIFT);
-}
-
-__host__ __device__ inline void setVisited(CompactNode* node, bool visited) {
-    node->data = (node->data & ~(VISITED_MASK << VISITED_SHIFT)) |
-                 ((static_cast<uint64_t>(visited) & VISITED_MASK) << VISITED_SHIFT);
-}
-
-__host__ __device__ inline void setWall(CompactNode* node, bool wall) {
-    node->data = (node->data & ~(WALL_MASK << WALL_SHIFT)) |
-                 ((static_cast<uint64_t>(wall) & WALL_MASK) << WALL_SHIFT);
+    node->data = (node->data & ~(COL_MASK << COL_SHIFT)) | 
+                 ((static_cast<uint32_t>(col) & COL_MASK) << COL_SHIFT);
 }
 
 __host__ __device__ inline void setNodeNum(CompactNode* node, int num) {
     node->data = (node->data & ~(NODE_NUM_MASK << NODE_NUM_SHIFT)) |
-                 ((static_cast<uint64_t>(num) & NODE_NUM_MASK) << NODE_NUM_SHIFT);
+                 ((static_cast<uint32_t>(num) & NODE_NUM_MASK) << NODE_NUM_SHIFT);
 }
 
 __host__ __device__ inline void setParentIndex(CompactNode* node, int parent) {
     node->data = (node->data & ~(PARENT_MASK << PARENT_SHIFT)) |
-                 ((static_cast<uint64_t>(parent) & PARENT_MASK) << PARENT_SHIFT);
+                 ((static_cast<uint32_t>(parent) & PARENT_MASK) << PARENT_SHIFT);
 }
 
-// Getter functions
+// Getter functions aggiornate
 __host__ __device__ inline int getRow(CompactNode* node) {
     return static_cast<int>(node->data & ROW_MASK);
 }
 
 __host__ __device__ inline int getCol(CompactNode* node) {
     return static_cast<int>((node->data >> COL_SHIFT) & COL_MASK);
-}
-
-__host__ __device__ inline bool isVisited(CompactNode* node) {
-    return static_cast<bool>((node->data >> VISITED_SHIFT) & VISITED_MASK);
-}
-
-__host__ __device__ inline bool isWall(CompactNode* node) {
-    return static_cast<bool>((node->data >> WALL_SHIFT) & WALL_MASK);
 }
 
 __host__ __device__ inline int getNodeNum(CompactNode* node) {
@@ -181,7 +164,6 @@ __global__ void reconstructPathKernel(
     }
 }
 
-// Kernel modificato per usare CompactNode
 __global__ void exploreLevel(
     CompactNode* nodes,
     int* frontier,
@@ -217,18 +199,9 @@ __global__ void exploreLevel(
             int newIdx = coordToIndex(newRow, newCol, &config);
             CompactNode* newNode = &nodes[newIdx];
             
-            if (!isVisited(newNode) && !isWall(newNode)) {
-                // Atomic CAS su visited bit
-                uint64_t oldValue, newValue;
-                do {
-                    oldValue = nodes[newIdx].data;
-                    if ((oldValue >> VISITED_SHIFT) & VISITED_MASK) break;
-                    
-                    newValue = oldValue | (VISITED_MASK << VISITED_SHIFT);
-                } while (atomicCAS((unsigned long long*)&nodes[newIdx].data, 
-                                 oldValue, newValue) != oldValue);
-                
-                if (!((oldValue >> VISITED_SHIFT) & VISITED_MASK)) {
+            if (!newNode->visited && !newNode->wall) {
+                // Atomic operation semplificata per visited
+                if (atomicCAS((int*)&newNode->visited, 0, 1) == 0) {
                     setParentIndex(newNode, nodeIdx);
                     
                     int position = atomicAdd(nextFrontierSize, 1);
@@ -243,7 +216,7 @@ __global__ void exploreLevel(
     }
 }
 
-// Funzione di inizializzazione modificata
+// Funzione di inizializzazione aggiornata
 void initializeNodes(char maze[][COLS], CompactNode* nodes, Point* start, Point* end, MazeConfig config) {
     int nodeCount = 0;
     
@@ -254,15 +227,15 @@ void initializeNodes(char maze[][COLS], CompactNode* nodes, Point* start, Point*
             
             // Inizializza tutti i campi a 0
             currentNode->data = 0;
+            currentNode->visited = false;
+            currentNode->wall = (maze[i][j] == '#');
             
             // Setta i vari campi
             setRow(currentNode, i);
             setCol(currentNode, j);
-            setVisited(currentNode, false);
-            setWall(currentNode, maze[i][j] == '#');
             setParentIndex(currentNode, -1);
             
-            if (maze[i][j] == '#') {
+            if (currentNode->wall) {
                 setNodeNum(currentNode, -1);
             } else {
                 setNodeNum(currentNode, nodeCount++);
@@ -282,15 +255,14 @@ void initializeNodes(char maze[][COLS], CompactNode* nodes, Point* start, Point*
     printf("\nLabirinto con nodi numerati:\n");
     for (int i = 0; i < config.rows; i++) {
         for (int j = 0; j < config.cols; j++) {
-            if (isWall(&(nodes[coordToIndex(i, j, &config)]))) {
+            if (nodes[coordToIndex(i, j, &config)].wall) {
                 printf("## ");
             } else {
-                printf("%2d ", getNodeNum(&(nodes[coordToIndex(i, j, &config)])));
+                printf("%2d ", getNodeNum(&nodes[coordToIndex(i, j, &config)]));
             }
         }
         printf("\n");
     }
-
 }
 
 // Funzione per la gestione degli errori CUDA
@@ -510,7 +482,7 @@ int main() {
         return 1;
     }
 
-    printf("\n\nVersione CUDA_4 (riduzione dimensione di Node): \n");
+    printf("\n\nVersione CUDA_4 (riduzione dimensione di Node, con variazione per prestazioni): \n");
 
     // Configura le dimensioni del labirinto
     MazeConfig config;
