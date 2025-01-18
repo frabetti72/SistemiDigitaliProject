@@ -4,6 +4,7 @@
 /// visited e wall occupano 1 bit!!!!
 /// Ricostruzione del percorso introdotta in CUDA_2 momentaneamente rimossa in favore di quella sequenziale: potenziali errori con grandi dimensioni
 
+#include <stdint.h>  //aggiunta per configurazione colab (senza il compiler di colab non riconosce uint64_t)
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <errno.h>
