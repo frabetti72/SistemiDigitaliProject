@@ -1,7 +1,5 @@
 /// QUARTA implementazione di CUDA
-/// riduzione della struttura node da 24 bytes a 8 bytes : 
-/// Utilizzo di mask, e compressione del dato dentro un intero
-/// visited e wall occupano 1 bit!!!!
+/// versione con uint64_t: supporto a 100x100
 /// 
 /// versione con struttura modificata per rendere wall e visited facilmente accessibili
 ///
@@ -482,7 +480,7 @@ int main() {
         return 1;
     }
 
-    printf("\n\nVersione CUDA_4 (riduzione dimensione di Node, con variazione per prestazioni): \n");
+    printf("\n\nVersione CUDA_4 (riduzione dimensione di Node, con variazione per labirinti 100x100): \n");
 
     // Configura le dimensioni del labirinto
     MazeConfig config;

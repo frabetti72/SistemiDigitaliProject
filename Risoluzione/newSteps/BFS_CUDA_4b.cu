@@ -1,8 +1,4 @@
 /// QUARTA implementazione di CUDA
-/// riduzione della struttura node da 24 bytes a 8 bytes : 
-/// Utilizzo di mask, e compressione del dato dentro un intero
-/// visited e wall occupano 1 bit!!!!
-/// 
 /// versione con struttura modificata per rendere wall e visited facilmente accessibili
 ///
 /// Ricostruzione del percorso introdotta in CUDA_2 momentaneamente rimossa in favore di quella sequenziale: potenziali errori con grandi dimensioni
