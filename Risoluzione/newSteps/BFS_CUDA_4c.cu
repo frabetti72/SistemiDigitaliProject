@@ -474,7 +474,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
-    const char* filename = "mazes100.txt";
+    const char* filename = "mazes.txt";
     
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
