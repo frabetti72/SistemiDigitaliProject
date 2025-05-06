@@ -264,13 +264,15 @@ void initializeNodes(char maze[][COLS], CompactNode* nodes, Point* start, Point*
 }
 
 // Funzione per la gestione degli errori CUDA
-#define cudaCheckError() { \
-    cudaError_t err = cudaGetLastError(); \
-    if (err != cudaSuccess) { \
-        printf("CUDA error: %s, line %d\n", cudaGetErrorString(err), __LINE__); \
-        exit(1); \
-    } \
+/*
+#define cudaCheckError() { 
+    cudaError_t err = cudaGetLastError(); 
+    if (err != cudaSuccess) { 
+        printf("CUDA error: %s, line %d\n", cudaGetErrorString(err), __LINE__); 
+        exit(1); 
+    } 
 }
+    */
 
 bool solveMazeCuda(CompactNode* hostNodes, Point start, Point end, int* path, int* pathLength, MazeConfig config) {
     CompactNode* deviceNodes;
@@ -359,7 +361,7 @@ bool solveMazeCuda(CompactNode* hostNodes, Point start, Point end, int* path, in
     if (pathFound) {
         // Copia i nodi aggiornati indietro all'host
         cudaMemcpy(hostNodes, deviceNodes, MAX_NODES * sizeof(CompactNode), cudaMemcpyDeviceToHost);
-        cudaCheckError();
+        //cudaCheckError();
         
         // Ricostruisci il percorso (questa parte rimane sequenziale)
         *pathLength = 0;
@@ -472,7 +474,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
-    const char* filename = "mazes.txt";
+    const char* filename = "mazes100.txt";
     
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
