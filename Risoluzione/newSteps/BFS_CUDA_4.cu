@@ -14,7 +14,7 @@
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 100 
+#define MAX_MAZES 10
 
 
 // Costanti per i bit positions
