@@ -7,12 +7,12 @@
 #include <cuda_runtime.h>
 #include <errno.h>
 
-#define ROWS 20
-#define COLS 20
+#define ROWS 50
+#define COLS 50
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 100 
+#define MAX_MAZES 20
 
 // Strutture dati per GPU
 typedef struct {
@@ -388,6 +388,14 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
     const char* filename = "mazes.txt";  // Your input file name
+
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    // Avvia il timer
+    cudaEventRecord(start);
+
     
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
@@ -421,6 +429,21 @@ int main() {
             printf("\nNessun percorso trovato!\n");
         }
     }
-    
+
+       // Ferma il timer
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    // Calcolo del tempo in millisecondi
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    printf("Tempo di esecuzione: %.4f ms\n", milliseconds);
+
+    // Libera gli eventi
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+
     return 0;
 }
