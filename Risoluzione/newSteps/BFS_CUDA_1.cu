@@ -7,12 +7,12 @@
 #include <cuda_runtime.h>
 #include <errno.h>
 
-#define ROWS 20
-#define COLS 20
+#define ROWS 50
+#define COLS 50
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 100 
+#define MAX_MAZES 100
 
 // Strutture dati per GPU
 typedef struct {

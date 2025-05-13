@@ -6,13 +6,12 @@
 #include <cuda_runtime.h>
 #include <errno.h>
 
-
 #define ROWS 50
 #define COLS 50
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 20
+#define MAX_MAZES 100 
 
 struct MazeConfig {
     int rows;
@@ -57,7 +56,50 @@ __host__ __device__ Point makePoint(int row, int col) {
     p.col = col;
     return p;
 }
-
+// Kernel per la ricostruzione parallela del percorso
+__global__ void reconstructPathKernel(
+    Node* nodes,
+    int* path,
+    int* pathLength,
+    int startIdx,
+    int endIdx,
+    int maxLength
+) {
+    __shared__ int sharedPath[BLOCK_SIZE];
+    int currentLength = 0;
+    
+    // Il thread 0 si occupa della ricostruzione iniziale
+    if (threadIdx.x == 0) {
+        int currentIdx = endIdx;
+        while (currentIdx != startIdx && currentLength < maxLength) {
+            sharedPath[currentLength++] = nodes[currentIdx].nodeNum;
+            currentIdx = nodes[currentIdx].parentIndex;
+        }
+        if (currentLength < maxLength) {
+            sharedPath[currentLength++] = nodes[startIdx].nodeNum;
+        }
+        *pathLength = currentLength;
+    }
+    
+    // Sincronizza tutti i thread del blocco
+    __syncthreads();
+    
+    // Parallelizza l'inversione del percorso
+    int halfLength = *pathLength / 2;
+    for (int i = threadIdx.x; i < halfLength; i += blockDim.x) {
+        int temp = sharedPath[i];
+        sharedPath[i] = sharedPath[*pathLength - 1 - i];
+        sharedPath[*pathLength - 1 - i] = temp;
+    }
+    
+    // Sincronizza prima della copia finale
+    __syncthreads();
+    
+    // Copia il risultato in memoria globale
+    for (int i = threadIdx.x; i < *pathLength; i += blockDim.x) {
+        path[i] = sharedPath[i];
+    }
+}
 
 // Kernel principale per l'esplorazione BFS
 __global__ void exploreLevel(
@@ -176,6 +218,17 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     cudaMalloc(&deviceNextFrontierSize, sizeof(int));
     cudaMalloc(&deviceLevelCompleted, sizeof(bool));
     
+    // Ottieni informazioni dettagliate sulla GPU (anche se non useremo calcoli dinamici)
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, 0);
+    
+    // MODIFICA: Impostiamo una dimensione fissa per la griglia (1x1) con 256 thread
+    const int blockSize = 256;
+    const int gridSize = 1;
+    
+    printf("Device: %s\n", deviceProp.name);
+    printf("Fixed configuration: Grid size = %d, Block size = %d\n", gridSize, blockSize);
+    
     // Copia i nodi sulla GPU
     cudaMemcpy(deviceNodes, hostNodes, config.maxNodes * sizeof(Node), cudaMemcpyHostToDevice);
     
@@ -188,11 +241,7 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     int endIdx = coordToIndex(end.row, end.col, &config);
     bool pathFound = false;
     
-    // Ottieni informazioni sulla GPU
-    cudaDeviceProp deviceProp;
-    cudaGetDeviceProperties(&deviceProp, 0);
-    
-    // Loop principale BFS con dimensionamento ottimizzato della griglia
+    // Loop principale BFS con dimensione fissa della griglia
     while (true) {
         int hostFrontierSize;
         cudaMemcpy(&hostFrontierSize, deviceFrontierSize, sizeof(int), cudaMemcpyDeviceToHost);
@@ -205,20 +254,14 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
         cudaMemcpy(deviceNextFrontierSize, &zero, sizeof(int), cudaMemcpyHostToDevice);
         cudaMemcpy(deviceLevelCompleted, &false_val, sizeof(bool), cudaMemcpyHostToDevice);
         
-        // Calcolo ottimizzato della griglia
-        int numThreadsNeeded = hostFrontierSize;
-        int numBlocks = (numThreadsNeeded + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        // MODIFICA: Stampa avviso se la frontiera supera la capacità di un blocco
+        if (hostFrontierSize > blockSize) {
+            printf("Warning: Frontier size (%d) exceeds block capacity (%d). Some nodes may not be processed.\n", 
+                  hostFrontierSize, blockSize);
+        }
         
-        // Assicura un minimo di blocchi per SM per massimizzare l'occupancy
-        int minBlocksPerSM = deviceProp.maxThreadsPerMultiProcessor / BLOCK_SIZE;
-        int optimalMinBlocks = deviceProp.multiProcessorCount * minBlocksPerSM;
-        numBlocks = max(numBlocks, optimalMinBlocks);
-        
-        // Limita il numero di blocchi se necessario
-        int maxBlocks = deviceProp.maxGridSize[0];
-        numBlocks = min(numBlocks, maxBlocks);
-        
-        exploreLevel<<<numBlocks, BLOCK_SIZE, BLOCK_SIZE * sizeof(int)>>>(
+        // MODIFICA: Utilizziamo esattamente 1 blocco con 256 thread
+        exploreLevel<<<gridSize, blockSize, blockSize * sizeof(int)>>>(
             deviceNodes,
             deviceFrontier,
             deviceNextFrontier,
@@ -278,8 +321,6 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     
     return pathFound;
 }
-
-
 // Utility per stampare il labirinto
 void printMaze(char maze[ROWS][COLS]) {
     printf("\nLabirinto iniziale:\n");
@@ -290,6 +331,8 @@ void printMaze(char maze[ROWS][COLS]) {
         printf("\n");
     }
 }
+
+
 
 int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
     FILE* file = fopen(filename, "r");
@@ -363,14 +406,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
     const char* filename = "mazes.txt";
-
-
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    // Avvia il timer
-    cudaEventRecord(start);
-
+    
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
         printf("No mazes loaded from file. Exiting...\n");
@@ -390,11 +426,7 @@ int main() {
         char (*maze)[COLS] = mazes[i];
 
         Point start, end;
-        Node* nodes = (Node*)malloc(config.maxNodes * sizeof(Node));
-        if (nodes == NULL) {
-            printf("Memory allocation failed for maze %d\n", i + 1);
-            continue;
-        }
+        Node nodes[MAX_NODES];
         
         printMaze(maze);
         initializeNodes(maze, nodes, &start, &end, config);
@@ -412,23 +444,7 @@ int main() {
         } else {
             printf("\nNessun percorso trovato!\n");
         }
-        free(nodes);
     }
     
-       // Ferma il timer
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-
-    // Calcolo del tempo in millisecondi
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-
-    printf("Tempo di esecuzione: %.4f ms\n", milliseconds);
-
-    // Libera gli eventi
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-
-
     return 0;
 }

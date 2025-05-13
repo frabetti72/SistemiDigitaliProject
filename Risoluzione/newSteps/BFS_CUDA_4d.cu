@@ -1,18 +1,33 @@
-/// TERZA implementazione di CUDA
-/// implementata griglia maggiore per labirinti più grandi
-/// Ricostruzione del percorso introdotta in CUDA_2 momentaneamente rimossa in favore di quella sequenziale: potenziali errori con grandi dimensioni
 
+//versione lievemente migliorata di CUDA_4
+#include <stdint.h>  //aggiunta per configurazione colab (senza il compiler di colab non riconosce)
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <errno.h>
-
 
 #define ROWS 50
 #define COLS 50
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 20
+#define MAX_MAZES 10
+#define PADDING       ( (256 - (MAX_NODES % 256)) % 256 )
+
+
+// Costanti per i bit positions
+const uint64_t ROW_MASK = 0x3F;           // 6 bits
+const uint64_t COL_MASK = 0x3F;           // 6 bits
+const uint64_t VISITED_MASK = 0x1;        // 1 bit
+const uint64_t WALL_MASK = 0x1;           // 1 bit
+const uint64_t NODE_NUM_MASK = 0xFFF;     // 12 bits
+const uint64_t PARENT_MASK = 0xFFF;       // 12 bits
+
+// Bit shifts
+const int COL_SHIFT = 6;                  // After row
+const int VISITED_SHIFT = 12;             // After col
+const int WALL_SHIFT = 13;                // After visited
+const int NODE_NUM_SHIFT = 14;            // After wall
+const int PARENT_SHIFT = 26;              // After nodeNum
 
 struct MazeConfig {
     int rows;
@@ -26,14 +41,6 @@ typedef struct {
     int col;
 } Point;
 
-typedef struct {
-    Point pos;
-    bool visited;
-    int nodeNum;
-    int parentIndex;
-    bool wall;
-} Node;
-
 // Costanti per le direzioni (da copiare in memoria costante GPU)
 __constant__ Point directions[NUM_DIRECTIONS] = {
     {-1, 0},  // UP
@@ -41,6 +48,91 @@ __constant__ Point directions[NUM_DIRECTIONS] = {
     {0, -1},  // LEFT
     {0, 1}    // RIGHT
 };
+
+
+// --- 1.1 CompactNode con bit-packing su 64 bit
+struct __align__(8) CompactNode {
+    uint64_t data;  // [row:10|col:10|nodeNum:20|parent:24]
+};
+
+// --- 1.2 Flag array SoA per visited/wall, 32-bit allineati/padded
+__device__ __align__(128)
+uint32_t d_visitedFlags[MAX_NODES + PADDING];   // 0/1 per nodo
+
+__device__ __align__(128)
+uint32_t d_wallFlags   [MAX_NODES + PADDING];   // 0/1 per nodo
+
+// --- 1.3 Frontier globale e chunk counter
+__device__ int d_frontierSrc  [MAX_NODES];
+__device__ int d_frontierDst  [MAX_NODES];
+__device__ int d_frontierSize;
+__device__ int d_chunkCounter;
+
+
+/*
+typedef struct {
+    Point pos;
+    bool visited;
+    int nodeNum;
+    int parentIndex;
+    bool wall;
+} Node;
+*/
+
+// Helper functions per manipolare i bit
+__host__ __device__ inline void setRow(CompactNode* node, int row) {
+    node->data = (node->data & ~ROW_MASK) | (static_cast<uint64_t>(row) & ROW_MASK);
+}
+
+__host__ __device__ inline void setCol(CompactNode* node, int col) {
+    node->data = (node->data & ~(ROW_MASK << COL_SHIFT)) | 
+                 ((static_cast<uint64_t>(col) & ROW_MASK) << COL_SHIFT);
+}
+
+__host__ __device__ inline void setVisited(CompactNode* node, bool visited) {
+    node->data = (node->data & ~(VISITED_MASK << VISITED_SHIFT)) |
+                 ((static_cast<uint64_t>(visited) & VISITED_MASK) << VISITED_SHIFT);
+}
+
+__host__ __device__ inline void setWall(CompactNode* node, bool wall) {
+    node->data = (node->data & ~(WALL_MASK << WALL_SHIFT)) |
+                 ((static_cast<uint64_t>(wall) & WALL_MASK) << WALL_SHIFT);
+}
+
+__host__ __device__ inline void setNodeNum(CompactNode* node, int num) {
+    node->data = (node->data & ~(NODE_NUM_MASK << NODE_NUM_SHIFT)) |
+                 ((static_cast<uint64_t>(num) & NODE_NUM_MASK) << NODE_NUM_SHIFT);
+}
+
+__host__ __device__ inline void setParentIndex(CompactNode* node, int parent) {
+    node->data = (node->data & ~(PARENT_MASK << PARENT_SHIFT)) |
+                 ((static_cast<uint64_t>(parent) & PARENT_MASK) << PARENT_SHIFT);
+}
+
+// Getter functions
+__host__ __device__ inline int getRow(CompactNode* node) {
+    return static_cast<int>(node->data & ROW_MASK);
+}
+
+__host__ __device__ inline int getCol(CompactNode* node) {
+    return static_cast<int>((node->data >> COL_SHIFT) & COL_MASK);
+}
+
+__host__ __device__ inline bool isVisited(CompactNode* node) {
+    return static_cast<bool>((node->data >> VISITED_SHIFT) & VISITED_MASK);
+}
+
+__host__ __device__ inline bool isWall(CompactNode* node) {
+    return static_cast<bool>((node->data >> WALL_SHIFT) & WALL_MASK);
+}
+
+__host__ __device__ inline int getNodeNum(CompactNode* node) {
+    return static_cast<int>((node->data >> NODE_NUM_SHIFT) & NODE_NUM_MASK);
+}
+
+__host__ __device__ inline int getParentIndex(CompactNode* node) {
+    return static_cast<int>((node->data >> PARENT_SHIFT) & PARENT_MASK);
+}
 
 // Funzioni helper utilizzabili sia su host che device
 __host__ __device__ bool isValid(int r, int c, const MazeConfig* config) {
@@ -57,11 +149,54 @@ __host__ __device__ Point makePoint(int row, int col) {
     p.col = col;
     return p;
 }
+// Kernel per la ricostruzione parallela del percorso
+__global__ void reconstructPathKernel(
+    CompactNode* nodes,
+    int* path,
+    int* pathLength,
+    int startIdx,
+    int endIdx,
+    int maxLength
+) {
+    __shared__ int sharedPath[BLOCK_SIZE];
+    int currentLength = 0;
+    
+    // Il thread 0 si occupa della ricostruzione iniziale
+    if (threadIdx.x == 0) {
+        int currentIdx = endIdx;
+        while (currentIdx != startIdx && currentLength < maxLength) {
+            sharedPath[currentLength++] = getNodeNum(&(nodes[currentIdx]));
+            currentIdx = getParentIndex(&(nodes[currentIdx]));
+        }
+        if (currentLength < maxLength) {
+            sharedPath[currentLength++] = getNodeNum(&(nodes[startIdx]));
+        }
+        *pathLength = currentLength;
+    }
+    
+    // Sincronizza tutti i thread del blocco
+    __syncthreads();
+    
+    // Parallelizza l'inversione del percorso
+    int halfLength = *pathLength / 2;
+    for (int i = threadIdx.x; i < halfLength; i += blockDim.x) {
+        int temp = sharedPath[i];
+        sharedPath[i] = sharedPath[*pathLength - 1 - i];
+        sharedPath[*pathLength - 1 - i] = temp;
+    }
+    
+    // Sincronizza prima della copia finale
+    __syncthreads();
+    
+    // Copia il risultato in memoria globale
+    for (int i = threadIdx.x; i < *pathLength; i += blockDim.x) {
+        path[i] = sharedPath[i];
+    }
+}
 
-
-// Kernel principale per l'esplorazione BFS
+// Kernel modificato per usare CompactNode
 __global__ void exploreLevel(
-    Node* nodes,
+    CompactNode* nodes,
     int* frontier,
     int* nextFrontier,
     int* frontierSize,
@@ -76,7 +211,6 @@ __global__ void exploreLevel(
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int localId = threadIdx.x;
     
-    // Carica la frontiera in memoria condivisa
     if (tid < *frontierSize) {
         sharedFrontier[localId] = frontier[tid];
     }
@@ -85,21 +219,30 @@ __global__ void exploreLevel(
     if (tid >= *frontierSize) return;
     
     int nodeIdx = sharedFrontier[localId];
-    Node* currentNode = &nodes[nodeIdx];
+    CompactNode* currentNode = &nodes[nodeIdx];
     
     #pragma unroll
     for (int dir = 0; dir < NUM_DIRECTIONS; dir++) {
-        Point newPos = {
-            currentNode->pos.row + directions[dir].row,
-            currentNode->pos.col + directions[dir].col
-        };
+        int newRow = getRow(currentNode) + directions[dir].row;
+        int newCol = getCol(currentNode) + directions[dir].col;
         
-        if (isValid(newPos.row, newPos.col, &config)) {
-            int newIdx = coordToIndex(newPos.row, newPos.col, &config);
+        if (isValid(newRow, newCol, &config)) {
+            int newIdx = coordToIndex(newRow, newCol, &config);
+            CompactNode* newNode = &nodes[newIdx];
             
-            if (!nodes[newIdx].visited && !nodes[newIdx].wall) {
-                if (atomicCAS((int*)&nodes[newIdx].visited, 0, 1) == 0) {
-                    nodes[newIdx].parentIndex = nodeIdx;
+            if (!isVisited(newNode) && !isWall(newNode)) {
+                // Atomic CAS su visited bit
+                uint64_t oldValue, newValue;
+                do {
+                    oldValue = nodes[newIdx].data;
+                    if ((oldValue >> VISITED_SHIFT) & VISITED_MASK) break;
+                    
+                    newValue = oldValue | (VISITED_MASK << VISITED_SHIFT);
+                } while (atomicCAS((unsigned long long*)&nodes[newIdx].data, 
+                                 oldValue, newValue) != oldValue);
+                
+                if (!((oldValue >> VISITED_SHIFT) & VISITED_MASK)) {
+                    setParentIndex(newNode, nodeIdx);
                     
                     int position = atomicAdd(nextFrontierSize, 1);
                     nextFrontier[position] = newIdx;
@@ -113,28 +256,37 @@ __global__ void exploreLevel(
     }
 }
 
-// Funzione di inizializzazione dei nodi
-void initializeNodes(char maze[][COLS], Node* nodes, Point* start, Point* end, MazeConfig config) {
+// Funzione di inizializzazione modificata
+void initializeNodes(char maze[][COLS], CompactNode* nodes, Point* start, Point* end, MazeConfig config) {
     int nodeCount = 0;
     
     for (int i = 0; i < config.rows; i++) {
         for (int j = 0; j < config.cols; j++) {
             int idx = coordToIndex(i, j, &config);
-            nodes[idx].pos = makePoint(i, j);
-            nodes[idx].visited = false;
-            nodes[idx].wall = (maze[i][j] == '#');
-            nodes[idx].parentIndex = -1;
+            CompactNode* currentNode = &nodes[idx];
+            
+            // Inizializza tutti i campi a 0
+            currentNode->data = 0;
+            
+            // Setta i vari campi
+            setRow(currentNode, i);
+            setCol(currentNode, j);
+            setVisited(currentNode, false);
+            setWall(currentNode, maze[i][j] == '#');
+            setParentIndex(currentNode, -1);
             
             if (maze[i][j] == '#') {
-                nodes[idx].nodeNum = -1;
+                setNodeNum(currentNode, -1);
             } else {
-                nodes[idx].nodeNum = nodeCount++;
+                setNodeNum(currentNode, nodeCount++);
             }
             
             if (maze[i][j] == '2') {
-                *start = makePoint(i, j);
+                start->row = i;
+                start->col = j;
             } else if (maze[i][j] == '3') {
-                *end = makePoint(i, j);
+                end->row = i;
+                end->col = j;
             }
         }
     }
@@ -143,14 +295,15 @@ void initializeNodes(char maze[][COLS], Node* nodes, Point* start, Point* end, M
     printf("\nLabirinto con nodi numerati:\n");
     for (int i = 0; i < config.rows; i++) {
         for (int j = 0; j < config.cols; j++) {
-            if (nodes[coordToIndex(i, j, &config)].wall) {
+            if (isWall(&(nodes[coordToIndex(i, j, &config)]))) {
                 printf("## ");
             } else {
-                printf("%2d ", nodes[coordToIndex(i, j, &config)].nodeNum);
+                printf("%2d ", getNodeNum(&(nodes[coordToIndex(i, j, &config)])));
             }
         }
         printf("\n");
     }
+
 }
 
 // Funzione per la gestione degli errori CUDA
@@ -162,14 +315,14 @@ void initializeNodes(char maze[][COLS], Node* nodes, Point* start, Point* end, M
     } \
 }
 
-bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* pathLength, MazeConfig config) {
-    Node* deviceNodes;
+bool solveMazeCuda(CompactNode* hostNodes, Point start, Point end, int* path, int* pathLength, MazeConfig config) {
+    CompactNode* deviceNodes;
     int *deviceFrontier, *deviceNextFrontier;
     int *deviceFrontierSize, *deviceNextFrontierSize;
     bool *deviceLevelCompleted;
     
     // Allocazione memoria basata sulla configurazione
-    cudaMalloc(&deviceNodes, config.maxNodes * sizeof(Node));
+    cudaMalloc(&deviceNodes, config.maxNodes * sizeof(CompactNode));
     cudaMalloc(&deviceFrontier, config.maxNodes * sizeof(int));
     cudaMalloc(&deviceNextFrontier, config.maxNodes * sizeof(int));
     cudaMalloc(&deviceFrontierSize, sizeof(int));
@@ -177,7 +330,7 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     cudaMalloc(&deviceLevelCompleted, sizeof(bool));
     
     // Copia i nodi sulla GPU
-    cudaMemcpy(deviceNodes, hostNodes, config.maxNodes * sizeof(Node), cudaMemcpyHostToDevice);
+    cudaMemcpy(deviceNodes, hostNodes, config.maxNodes * sizeof(CompactNode), cudaMemcpyHostToDevice);
     
     // Inizializzazione frontiera
     int startIdx = coordToIndex(start.row, start.col, &config);
@@ -248,17 +401,17 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     // Se abbiamo trovato un percorso, ricostruiscilo
     if (pathFound) {
         // Copia i nodi aggiornati indietro all'host
-        cudaMemcpy(hostNodes, deviceNodes, config.maxNodes * sizeof(Node), cudaMemcpyDeviceToHost);
+        cudaMemcpy(hostNodes, deviceNodes, MAX_NODES * sizeof(CompactNode), cudaMemcpyDeviceToHost);
         cudaCheckError();
         
         // Ricostruisci il percorso (questa parte rimane sequenziale)
         *pathLength = 0;
         int currentIdx = endIdx;
         while (currentIdx != startIdx) {
-            path[(*pathLength)++] = hostNodes[currentIdx].nodeNum;
-            currentIdx = hostNodes[currentIdx].parentIndex;
+            path[(*pathLength)++] = getNodeNum(&(hostNodes[currentIdx]));
+            currentIdx = getParentIndex(&(hostNodes[currentIdx]));
         }
-        path[(*pathLength)++] = hostNodes[startIdx].nodeNum;
+        path[(*pathLength)++] = getNodeNum(&(hostNodes[startIdx]));
         
         // Inverti il percorso
         for (int i = 0; i < *pathLength / 2; i++) {
@@ -363,21 +516,14 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
     const char* filename = "mazes.txt";
-
-
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    // Avvia il timer
-    cudaEventRecord(start);
-
+    
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
         printf("No mazes loaded from file. Exiting...\n");
         return 1;
     }
 
-    printf("\n\nVersione CUDA_3 (parallelizzazione ottimizzata per grandi labirinti): \n");
+    printf("\n\nVersione CUDA_4 (riduzione dimensione di Node): \n");
 
     // Configura le dimensioni del labirinto
     MazeConfig config;
@@ -390,11 +536,7 @@ int main() {
         char (*maze)[COLS] = mazes[i];
 
         Point start, end;
-        Node* nodes = (Node*)malloc(config.maxNodes * sizeof(Node));
-        if (nodes == NULL) {
-            printf("Memory allocation failed for maze %d\n", i + 1);
-            continue;
-        }
+        CompactNode nodes[MAX_NODES];
         
         printMaze(maze);
         initializeNodes(maze, nodes, &start, &end, config);
@@ -412,23 +554,7 @@ int main() {
         } else {
             printf("\nNessun percorso trovato!\n");
         }
-        free(nodes);
     }
     
-       // Ferma il timer
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-
-    // Calcolo del tempo in millisecondi
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-
-    printf("Tempo di esecuzione: %.4f ms\n", milliseconds);
-
-    // Libera gli eventi
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-
-
     return 0;
 }
