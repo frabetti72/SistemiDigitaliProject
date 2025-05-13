@@ -503,6 +503,13 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
     const char* filename = "mazes.txt";
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    // Avvia il timer
+    cudaEventRecord(start);
+
     
     int numMazes = loadMazesFromFile(filename, mazes);
     if (numMazes == 0) {
@@ -542,6 +549,21 @@ int main() {
             printf("\nNessun percorso trovato!\n");
         }
     }
+    
+       // Ferma il timer
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    // Calcolo del tempo in millisecondi
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    printf("Tempo di esecuzione: %.4f ms\n", milliseconds);
+
+    // Libera gli eventi
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
     
     return 0;
 }
