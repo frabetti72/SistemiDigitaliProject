@@ -9,8 +9,6 @@
 
 #define ROWS 50
 #define COLS 50
-#define ROWS 50
-#define COLS 50
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
