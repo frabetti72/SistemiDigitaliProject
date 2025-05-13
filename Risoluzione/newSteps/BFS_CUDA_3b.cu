@@ -356,6 +356,7 @@ void printMaze(char maze[ROWS][COLS]) {
 }
 
 
+
 int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
     FILE* file = fopen(filename, "r");
     if (file == NULL) {

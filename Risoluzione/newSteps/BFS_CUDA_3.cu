@@ -11,7 +11,7 @@
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 100 
+#define MAX_MAZES 10
 
 struct MazeConfig {
     int rows;
@@ -56,50 +56,7 @@ __host__ __device__ Point makePoint(int row, int col) {
     p.col = col;
     return p;
 }
-// Kernel per la ricostruzione parallela del percorso
-__global__ void reconstructPathKernel(
-    Node* nodes,
-    int* path,
-    int* pathLength,
-    int startIdx,
-    int endIdx,
-    int maxLength
-) {
-    __shared__ int sharedPath[BLOCK_SIZE];
-    int currentLength = 0;
-    
-    // Il thread 0 si occupa della ricostruzione iniziale
-    if (threadIdx.x == 0) {
-        int currentIdx = endIdx;
-        while (currentIdx != startIdx && currentLength < maxLength) {
-            sharedPath[currentLength++] = nodes[currentIdx].nodeNum;
-            currentIdx = nodes[currentIdx].parentIndex;
-        }
-        if (currentLength < maxLength) {
-            sharedPath[currentLength++] = nodes[startIdx].nodeNum;
-        }
-        *pathLength = currentLength;
-    }
-    
-    // Sincronizza tutti i thread del blocco
-    __syncthreads();
-    
-    // Parallelizza l'inversione del percorso
-    int halfLength = *pathLength / 2;
-    for (int i = threadIdx.x; i < halfLength; i += blockDim.x) {
-        int temp = sharedPath[i];
-        sharedPath[i] = sharedPath[*pathLength - 1 - i];
-        sharedPath[*pathLength - 1 - i] = temp;
-    }
-    
-    // Sincronizza prima della copia finale
-    __syncthreads();
-    
-    // Copia il risultato in memoria globale
-    for (int i = threadIdx.x; i < *pathLength; i += blockDim.x) {
-        path[i] = sharedPath[i];
-    }
-}
+
 
 // Kernel principale per l'esplorazione BFS
 __global__ void exploreLevel(
@@ -290,7 +247,7 @@ bool solveMazeCuda(Node* hostNodes, Point start, Point end, int* path, int* path
     // Se abbiamo trovato un percorso, ricostruiscilo
     if (pathFound) {
         // Copia i nodi aggiornati indietro all'host
-        cudaMemcpy(hostNodes, deviceNodes, MAX_NODES * sizeof(Node), cudaMemcpyDeviceToHost);
+        cudaMemcpy(hostNodes, deviceNodes, config.maxNodes * sizeof(Node), cudaMemcpyDeviceToHost);
         cudaCheckError();
         
         // Ricostruisci il percorso (questa parte rimane sequenziale)
@@ -425,7 +382,11 @@ int main() {
         char (*maze)[COLS] = mazes[i];
 
         Point start, end;
-        Node nodes[MAX_NODES];
+        Node* nodes = (Node*)malloc(config.maxNodes * sizeof(Node));
+        if (nodes == NULL) {
+            printf("Memory allocation failed for maze %d\n", i + 1);
+            continue;
+        }
         
         printMaze(maze);
         initializeNodes(maze, nodes, &start, &end, config);
@@ -443,6 +404,7 @@ int main() {
         } else {
             printf("\nNessun percorso trovato!\n");
         }
+        free(nodes);
     }
     
     return 0;
