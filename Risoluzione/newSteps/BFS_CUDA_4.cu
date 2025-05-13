@@ -14,7 +14,7 @@
 #define MAX_NODES (ROWS * COLS)
 #define NUM_DIRECTIONS 4
 #define BLOCK_SIZE 256
-#define MAX_MAZES 10
+#define MAX_MAZES 20
 
 
 // Costanti per i bit positions
@@ -503,6 +503,7 @@ int loadMazesFromFile(const char* filename, char mazes[][ROWS][COLS]) {
 int main() {
     char mazes[MAX_MAZES][ROWS][COLS];
     const char* filename = "mazes.txt";
+    int risolti=0;
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
@@ -545,6 +546,7 @@ int main() {
                 if (j < pathLength - 1) printf(", ");
             }
             printf("\n");
+            risolti++;
         } else {
             printf("\nNessun percorso trovato!\n");
         }
@@ -559,6 +561,7 @@ int main() {
     cudaEventElapsedTime(&milliseconds, start, stop);
 
     printf("Tempo di esecuzione: %.4f ms\n", milliseconds);
+        printf("Risoldi: %d", risolti);
 
     // Libera gli eventi
     cudaEventDestroy(start);
