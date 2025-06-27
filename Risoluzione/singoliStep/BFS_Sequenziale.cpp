@@ -1,5 +1,6 @@
-/// versione ristrutturata per CUDA, lo scopo è creare una struttura che ora risulti parallelizzabile
-///
+/// versione iniziale
+/// testato con multipli labirinti 50x50
+
 
 #include <stdio.h>
 #include <stdlib.h>
