@@ -17,7 +17,7 @@
 #include <iostream>
 
 #define NUM_DIRECTIONS 4
-#define MAX_MAZES 100
+#define MAX_MAZES 1000
 #define NOT_VISITED -1
 
 // -----------------------------------------------------------------------------
@@ -130,7 +130,7 @@ int computePathLength(int* path,int pathLen){ return pathLen>0?pathLen-1:-1; }
 // MAIN
 // -----------------------------------------------------------------------------
 int main(){
-    Maze** mazes; const char* file="mazes100.txt";
+    Maze** mazes; const char* file="mazes1000.txt";
     int numMazes=loadMazesFromFile(file,&mazes); if(numMazes==0){ puts("No mazes loaded."); return 1; }
 
     std::vector<int> pathLengths(numMazes,-1); int solvedCnt=0;
@@ -151,4 +151,5 @@ int main(){
     std::cout<<"\n";
 
     for(int i=0;i<numMazes;++i) freeMaze(mazes[i]); free(mazes);
-    return 0; }
+    return 0; 
+}
